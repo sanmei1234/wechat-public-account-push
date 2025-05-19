@@ -471,122 +471,90 @@ export const getPoetry = async () => {
  * 星座运势请求
  * @param {string} date - 出生日期
  * @param {string} dateType - 时段类型（今日/明日/本周/本月/今年）
- * @returns {Promise<Object>} 结构化星座运势数据，适配微信推送
+ * @returns {Promise<Object>} 结构化星座运势数据（无时段前缀，适配微信推送）
  */
 export const getConstellationFortune = async (date, dateType) => {
-  // 功能开关判断
   if (config.SWITCH && config.SWITCH.horoscope === false) {
-    return {}; // 返回空对象，避免模板引用错误
+    return {};
   }
 
   const periods = ['今日', '明日', '本周', '本月', '今年'];
   const defaultType = [
-    { name: '综合运势', key: 'comprehensiveHoroscope' },
-    { name: '爱情运势', key: 'loveHoroscope' },
-    { name: '事业学业', key: 'careerHoroscope' },
-    { name: '财富运势', key: 'wealthHoroscope' },
-    { name: '健康运势', key: 'healthyHoroscope' }
+    { name: '综合运势', key: 'comprehensive' },
+    { name: '爱情运势', key: 'love' },
+    { name: '事业学业', key: 'career' },
+    { name: '财富运势', key: 'wealth' },
+    { name: '健康运势', key: 'health' },
   ];
 
-  // 处理默认时段和验证
+  // 处理时段
   const finalDateType = dateType || '今日';
   const dateTypeIndex = periods.indexOf(finalDateType);
-  if (!date || dateTypeIndex === -1) {
-    return {}; // 参数错误时返回空对象
-  }
+  if (!date || dateTypeIndex === -1) return {};
 
-  // 获取星座并检查缓存
+  // 获取星座及缓存
   const { en: constellation } = getConstellation(date);
   const cacheKey = `${constellation}_${dateTypeIndex}`;
   if (RUN_TIME_STORAGE[cacheKey]) {
-    console.log(`读取星座运势缓存: ${cacheKey}`);
-    return formatFortuneData(RUN_TIME_STORAGE[cacheKey], finalDateType);
+    return RUN_TIME_STORAGE[cacheKey];
   }
 
-  // 请求星座运势数据
+  // 请求数据
   const url = `https://www.xzw.com/fortune/${constellation}/${dateTypeIndex}.html`;
   try {
     const { data } = await axios.get(url).catch((err) => ({ data: null }));
-    const fortuneData = [];
-
-    if (data) {
-      // 解析HTML内容
-      const jsdom = new JSDOM(data);
-      defaultType.forEach((item, index) => {
-        const element = jsdom.window.document.querySelector(`.c_cont p strong.p${index + 1}`)?.nextElementSibling;
-        const content = element?.innerHTML.replace(/<small.*/, '') || DEFAULT_OUTPUT.constellationFortune;
-        
-        // 按20字拆分运势内容
-        const segments = splitTextIntoSegments(content);
-        
-        fortuneData.push({
-          name: toLowerLine(item.key),
-          title: `${finalDateType}${item.name}`,
-          segments,
-          color: getColor()
-        });
+    const fortuneSegments = defaultType.reduce((acc, item, index) => {
+      // 解析内容（去除前缀逻辑）
+      const value = parseFortuneContent(data, index);
+      
+      // 拆分文本，不添加时段/类型前缀
+      const segments = splitText(value, 20);
+      
+      // 生成字段名：如 love_0, career_1
+      segments.forEach((seg, segIndex) => {
+        acc[`${item.key}_${segIndex}`] = {
+          value: seg,
+          color: getColor(),
+        };
       });
-    } else {
-      // 数据获取失败时使用默认内容
-      defaultType.forEach((item) => {
-        fortuneData.push({
-          name: toLowerLine(item.key),
-          title: `${finalDateType}${item.name}`,
-          segments: splitTextIntoSegments(DEFAULT_OUTPUT.constellationFortune),
-          color: getColor()
-        });
-      });
-    }
+      return acc;
+    }, {});
 
-    // 缓存并返回格式化后的数据
-    RUN_TIME_STORAGE[cacheKey] = cloneDeep(fortuneData);
-    return formatFortuneData(fortuneData, finalDateType);
+    // 缓存纯分段数据
+    RUN_TIME_STORAGE[cacheKey] = fortuneSegments;
+    return fortuneSegments;
   } catch (e) {
-    console.error('星座运势请求失败:', e);
-    return {}; // 出错时返回空对象
+    console.error('星座运势解析错误:', e);
+    // 返回默认分段数据（无前缀）
+    return defaultType.reduce((acc, item) => {
+      const defaultSegs = splitText(DEFAULT_OUTPUT.constellationFortune, 20);
+      defaultSegs.forEach((seg, segIndex) => {
+        acc[`${item.key}_${segIndex}`] = { value: seg, color: getColor() };
+      });
+      return acc;
+    }, {});
   }
 };
 
-// 辅助函数：按20字拆分文本并生成微信模板字段
-const splitTextIntoSegments = (text, maxLength = 20) => {
-  const segments = [];
-  for (let i = 0; i < text.length; i += maxLength) {
-    segments.push({
-      value: text.slice(i, i + maxLength),
-      // 生成如 "wx_horoscope_comprehensive_0" 的字段名
-      fieldName: `wx_horoscope_${segments.length}`
-    });
-  }
-  return segments;
+// 解析运势内容（移除无关标签和前缀）
+const parseFortuneContent = (html, index) => {
+  if (!html) return DEFAULT_OUTPUT.constellationFortune;
+  const jsdom = new JSDOM(html);
+  const element = jsdom.window.document.querySelector(`.c_cont p strong.p${index + 1}`)?.nextElementSibling;
+  return element?.innerHTML.replace(/<small.*/, '').trim() || DEFAULT_OUTPUT.constellationFortune;
 };
 
-// 格式化返回数据，适配微信模板
-const formatFortuneData = (fortuneData, dateType) => {
-  const result = {
-    wxHoroscopeTitle: `${dateType}星座运势`, // 总标题
-    wxHoroscopeCount: fortuneData.length, // 运势类型数量
-    wxHoroscopes: fortuneData // 所有运势类型数据
-  };
-
-  // 扁平化所有分段，生成直接可用的模板字段
-  fortuneData.forEach((item, typeIndex) => {
-    item.segments.forEach((segment, segIndex) => {
-      // 生成如 "wx_horoscope_comprehensive_0" 的字段名
-      const fieldKey = `wx_horoscope_${item.name}_${segIndex}`;
-      
-      // 只在第一段添加标题前缀，其他段不添加
-      const valueWithPrefix = segIndex === 0 
-        ? `${item.title}: ${segment.value}` 
-        : segment.value;
-      
-      result[fieldKey] = {
-        value: valueWithPrefix,
-        color: item.color
-      };
-    });
-  });
-
-  return result;
+// 文本拆分函数（纯文本，无前缀）
+const splitText = (text, chunkSize = 20) => {
+  return text.split(/\s+/).reduce((acc, word) => {
+    const last = acc[acc.length - 1] || '';
+    if (last.length + word.length <= chunkSize) {
+      acc[acc.length - 1] = last + (last ? ' ' : '') + word;
+    } else {
+      acc.push(word);
+    }
+    return acc;
+  }, []).join(' ').split(new RegExp(`(?<=\\G.{${chunkSize}})`)).filter(Boolean);
 };
 /**
  * 获取课程表
