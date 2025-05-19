@@ -385,32 +385,41 @@ export const getMomentCopyrighting = async () => {
 
 /**
  * 毒鸡汤
- * @returns {Promise<String>} 毒鸡汤内容
+ * @returns {Promise<Object>} 返回结构化的毒鸡汤数据，适配微信公众号推送格式
  */
 export const getPoisonChickenSoup = async () => {
+  // 如果配置中关闭了毒鸡汤功能，直接返回空对象
   if (config.SWITCH && config.SWITCH.poisonChickenSoup === false) {
-    return ''
+    return {}
   }
 
+  // 从API获取毒鸡汤内容
   const data = await getWordsFromApiShadiao('du') || DEFAULT_OUTPUT.poisonChickenSoup
-
-  const arr = []
-  for (let j = 0, i = 0; j < data.length; j += 20) {
-    arr.push({
-      name: `wx_poison_chicken_soup_${i}`,
-      value: data.slice(j, j + 20),
+  
+  // 按每20个字符分割文本，并构建符合微信模板的字段结构
+  const segments = []
+  for (let i = 0; i < data.length; i += 20) {
+    segments.push({
+      // 微信模板中使用的变量名，格式为 wx_poison_chicken_soup_0, wx_poison_chicken_soup_1, ...
+      name: `wx_poison_chicken_soup_${segments.length}`,
+      // 截取20个字符的文本片段
+      value: data.slice(i, i + 20),
+      // 可选：为每个字段设置颜色
       color: getColor()
     })
-    i++
   }
 
+  // 构建返回对象，包含原始文本和分割后的字段数组
   return {
+    // 原始完整文本
     poisonChickenSoup: data,
-    wxPoisonChickenSoup: arr
+    // 分割后的字段数组，用于微信模板
+    wxPoisonChickenSoup: segments,
+    // 新增：返回分割后的文本段数量，方便模板判断需要显示多少个字段
+    wxPoisonChickenSoupCount: segments.length
   }
 }
-
-/**
+  /**
  * 古诗古文
  * @returns {Promise<{}|{dynasty: string, author: string, title: string, content: string}>} 古诗内容 标题 作者 朝代
  */
@@ -460,96 +469,112 @@ export const getPoetry = async () => {
 
 /**
  * 星座运势请求
- * @param {string} date
- * @param {string} dateType
- * @returns
+ * @param {string} date - 出生日期（用于获取星座）
+ * @param {string} dateType - 时段（今日/明日/本周/本月/今年）
+ * @returns {Promise<Array>} 结构化星座运势数据，适配微信推送格式
  */
 export const getConstellationFortune = async (date, dateType) => {
   if (config.SWITCH && config.SWITCH.horoscope === false) {
-    return []
+    return [];
   }
 
-  const res = []
+  const res = [];
   if (!date) {
-    return res
+    return res;
   }
 
-  const periods = ['今日', '明日', '本周', '本月', '今年']
-  const defaultType = [{
-    name: '综合运势',
-    key: 'comprehensiveHoroscope',
-  }, {
-    name: '爱情运势',
-    key: 'loveHoroscope',
-  }, {
-    name: '事业学业',
-    key: 'careerHoroscope',
-  }, {
-    name: '财富运势',
-    key: 'wealthHoroscope',
-  }, {
-    name: '健康运势',
-    key: 'healthyHoroscope',
-  }]
+  const periods = ['今日', '明日', '本周', '本月', '今年'];
+  const defaultType = [
+    { name: '综合运势', key: 'comprehensiveHoroscope' },
+    { name: '爱情运势', key: 'loveHoroscope' },
+    { name: '事业学业', key: 'careerHoroscope' },
+    { name: '财富运势', key: 'wealthHoroscope' },
+    { name: '健康运势', key: 'healthyHoroscope' },
+  ];
 
-  // 未填写时段，则取今日
-  if (!dateType) {
-    dateType = '今日'
-  }
-
-  const dateTypeIndex = periods.indexOf(dateType)
+  // 处理时段参数
+  dateType = dateType || '今日';
+  const dateTypeIndex = periods.indexOf(dateType);
   if (dateTypeIndex === -1) {
-    console.error('星座日期类型horoscopeDateType错误, 请确认是否按要求填写!')
-    return res
+    console.error('星座日期类型错误，请确认是否为今日/明日/本周/本月/今年');
+    return res;
   }
 
-  // 获取星座id
-  const { en: constellation } = getConstellation(date)
+  // 获取星座ID
+  const { en: constellation } = getConstellation(date);
+  if (!constellation) return res;
 
-  // 读取缓存
-  if (RUN_TIME_STORAGE[`${constellation}_${dateTypeIndex}`]) {
-    console.log(`获取了相同的数据，读取缓存 >>> ${constellation}_${dateTypeIndex}`)
-    return RUN_TIME_STORAGE[`${constellation}_${dateTypeIndex}`]
+  // 缓存键名
+  const cacheKey = `${constellation}_${dateTypeIndex}`;
+  if (RUN_TIME_STORAGE[cacheKey]) {
+    console.log(`读取缓存: ${cacheKey}`);
+    return RUN_TIME_STORAGE[cacheKey];
   }
 
-  const url = `https://www.xzw.com/fortune/${constellation}/${dateTypeIndex}.html`
+  // 构造请求URL
+  const url = `https://www.xzw.com/fortune/${constellation}/${dateTypeIndex}.html`;
   try {
-    const { data } = await axios.get(url).catch((err) => err)
-    if (data) {
-      const jsdom = new JSDOM(data)
-      defaultType.forEach((item, index) => {
-        let value = jsdom.window.document.querySelector(`.c_cont p strong.p${index + 1}`).nextElementSibling.innerHTML.replace(/<small.*/, '')
-        if (!value) {
-          value = DEFAULT_OUTPUT.constellationFortune
-          console.error(`${item.name}获取失败`)
+    const { data } = await axios.get(url).catch((err) => err);
+    const jsdom = new JSDOM(data || ''); // 处理data可能为null的情况
+
+    defaultType.forEach((item, index) => {
+      let value = '';
+      try {
+        // 解析DOM，添加错误边界处理
+        const element = jsdom.window.document.querySelector(`.c_cont p strong.p${index + 1}`);
+        if (element) {
+          value = element.nextElementSibling?.innerHTML?.replace(/<small.*/, '') || '';
         }
-        res.push({
-          name: toLowerLine(item.key),
-          value: `${dateType}${item.name}: ${value}`,
-          color: getColor(),
-        })
-      })
-    } else {
-      // 拿不到数据则拼假数据, 保证运行
-      defaultType.forEach((item) => {
-        const value = DEFAULT_OUTPUT.constellationFortune
-        res.push({
-          name: toLowerLine(item.key),
-          value: `${dateType}${item.name}: ${value}`,
-          color: getColor(),
-        })
-      })
-    }
+      } catch (e) {
+        console.error(`解析${item.name}时出错`, e);
+      }
 
-    RUN_TIME_STORAGE[`${constellation}_${dateTypeIndex}`] = cloneDeep(res)
+      // 处理value为空的情况
+      if (!value.trim()) {
+        value = DEFAULT_OUTPUT.constellationFortune;
+        console.error(`${item.name}数据为空，使用默认值`);
+      }
 
-    return res
+      // 按20字拆分运势内容
+      const segments = splitText(value, 20); // 新增拆分函数
+      segments.forEach((segment, segIndex) => {
+        res.push({
+          // 生成微信模板字段名，如 love_horoscope_0, love_horoscope_1
+          name: `${toLowerLine(item.key)}_${segIndex}`,
+          value: `${dateType}${item.name}: ${segment}`, // 带时段和类型前缀
+          color: getColor(),
+        });
+      });
+    });
+
+    // 缓存结构化数据（包含拆分后的多段内容）
+    RUN_TIME_STORAGE[cacheKey] = cloneDeep(res);
+    return res;
   } catch (e) {
-    console.error('星座运势：发生错误', e)
-    return res
+    console.error('星座运势请求失败', e);
+    // 生成默认的拆分数据
+    defaultType.forEach((item) => {
+      const defaultSegments = splitText(DEFAULT_OUTPUT.constellationFortune, 20);
+      defaultSegments.forEach((seg, segIndex) => {
+        res.push({
+          name: `${toLowerLine(item.key)}_${segIndex}`,
+          value: `${dateType}${item.name}: ${seg}`,
+          color: getColor(),
+        });
+      });
+    });
+    return res;
   }
-}
+};
 
+// 新增：文本拆分函数（可复用）
+const splitText = (text, chunkSize = 20) => {
+  const segments = [];
+  for (let i = 0; i < text.length; i += chunkSize) {
+    segments.push(text.slice(i, i + chunkSize));
+  }
+  return segments.length === 0 ? [text] : segments; // 处理空文本
+};
 /**
  * 获取课程表
  * @param courseSchedule {Array<Array<String>>|{benchmark: {date: string, isOdd: boolean}, courses: {odd: Array<Array<string>>, even:Array<Array<string>>}}}
