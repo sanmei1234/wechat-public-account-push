@@ -323,32 +323,41 @@ export const getWordsFromApiShadiao = async (type) => {
 
 /**
  * 土味情话（彩虹屁）
- * @returns {Promise<String>} 土味情话(彩虹屁）内容
+ * @returns {Promise<Object>} 返回结构化的土味情话数据，适配微信公众号推送格式
  */
 export const getEarthyLoveWords = async () => {
+  // 如果配置中关闭了土味情话功能，直接返回空
   if (config.SWITCH && config.SWITCH.earthyLoveWords === false) {
-    return ''
+    return {} // 改为返回空对象，避免模板中引用不存在的属性
   }
 
+  // 从API获取土味情话内容
   const data = await getWordsFromApiShadiao('chp') || DEFAULT_OUTPUT.earthyLoveWords
-
-  const arr = []
-  for (let j = 0, i = 0; j < data.length; j += 20) {
-    arr.push({
-      name: `wx_earthy_love_words_${i}`,
-      value: data.slice(j, j + 20),
+  
+  // 按每20个字符分割文本，并构建符合微信模板的字段结构
+  const segments = []
+  for (let i = 0; i < data.length; i += 20) {
+    segments.push({
+      // 微信模板中使用的变量名，格式为 wx_earthy_love_words_0, wx_earthy_love_words_1, ...
+      name: `wx_earthy_love_words_${segments.length}`,
+      // 截取20个字符的文本片段
+      value: data.slice(i, i + 20),
+      // 可选：为每个字段设置颜色（根据你的模板需求）
       color: getColor()
     })
-    i++
   }
 
+  // 构建返回对象，包含原始文本和分割后的字段数组
   return {
+    // 原始完整文本（保留，可能用于其他地方）
     earthyLoveWords: data,
-    wxEarthyLoveWords: arr
+    // 分割后的字段数组，用于微信模板
+    wxEarthyLoveWords: segments,
+    // 新增：返回分割后的文本段数量，方便模板判断需要显示多少个字段
+    wxEarthyLoveWordsCount: segments.length
   }
 }
-
-/**
+  /**
  * 朋友圈文案
  * @returns {Promise<String>} 朋友圈文案内容
  */
