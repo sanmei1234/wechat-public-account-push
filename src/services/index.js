@@ -469,18 +469,14 @@ export const getPoetry = async () => {
 
 /**
  * 星座运势请求
- * @param {string} date - 出生日期（用于获取星座）
- * @param {string} dateType - 时段（今日/明日/本周/本月/今年）
- * @returns {Promise<Array>} 结构化星座运势数据，适配微信推送格式
+ * @param {string} date - 出生日期
+ * @param {string} dateType - 时段类型（今日/明日/本周/本月/今年）
+ * @returns {Promise<Object>} 结构化星座运势数据，适配微信推送
  */
 export const getConstellationFortune = async (date, dateType) => {
+  // 功能开关判断
   if (config.SWITCH && config.SWITCH.horoscope === false) {
-    return [];
-  }
-
-  const res = [];
-  if (!date) {
-    return res;
+    return {}; // 返回空对象，避免模板引用错误
   }
 
   const periods = ['今日', '明日', '本周', '本月', '今年'];
@@ -489,91 +485,108 @@ export const getConstellationFortune = async (date, dateType) => {
     { name: '爱情运势', key: 'loveHoroscope' },
     { name: '事业学业', key: 'careerHoroscope' },
     { name: '财富运势', key: 'wealthHoroscope' },
-    { name: '健康运势', key: 'healthyHoroscope' },
+    { name: '健康运势', key: 'healthyHoroscope' }
   ];
 
-  // 处理时段参数
-  dateType = dateType || '今日';
-  const dateTypeIndex = periods.indexOf(dateType);
-  if (dateTypeIndex === -1) {
-    console.error('星座日期类型错误，请确认是否为今日/明日/本周/本月/今年');
-    return res;
+  // 处理默认时段和验证
+  const finalDateType = dateType || '今日';
+  const dateTypeIndex = periods.indexOf(finalDateType);
+  if (!date || dateTypeIndex === -1) {
+    return {}; // 参数错误时返回空对象
   }
 
-  // 获取星座ID
+  // 获取星座并检查缓存
   const { en: constellation } = getConstellation(date);
-  if (!constellation) return res;
-
-  // 缓存键名
   const cacheKey = `${constellation}_${dateTypeIndex}`;
   if (RUN_TIME_STORAGE[cacheKey]) {
-    console.log(`读取缓存: ${cacheKey}`);
-    return RUN_TIME_STORAGE[cacheKey];
+    console.log(`读取星座运势缓存: ${cacheKey}`);
+    return formatFortuneData(RUN_TIME_STORAGE[cacheKey], finalDateType);
   }
 
-  // 构造请求URL
+  // 请求星座运势数据
   const url = `https://www.xzw.com/fortune/${constellation}/${dateTypeIndex}.html`;
   try {
-    const { data } = await axios.get(url).catch((err) => err);
-    const jsdom = new JSDOM(data || ''); // 处理data可能为null的情况
+    const { data } = await axios.get(url).catch((err) => ({ data: null }));
+    const fortuneData = [];
 
-    defaultType.forEach((item, index) => {
-      let value = '';
-      try {
-        // 解析DOM，添加错误边界处理
-        const element = jsdom.window.document.querySelector(`.c_cont p strong.p${index + 1}`);
-        if (element) {
-          value = element.nextElementSibling?.innerHTML?.replace(/<small.*/, '') || '';
-        }
-      } catch (e) {
-        console.error(`解析${item.name}时出错`, e);
-      }
-
-      // 处理value为空的情况
-      if (!value.trim()) {
-        value = DEFAULT_OUTPUT.constellationFortune;
-        console.error(`${item.name}数据为空，使用默认值`);
-      }
-
-      // 按20字拆分运势内容
-      const segments = splitText(value, 20); // 新增拆分函数
-      segments.forEach((segment, segIndex) => {
-        res.push({
-          // 生成微信模板字段名，如 love_horoscope_0, love_horoscope_1
-          name: `${toLowerLine(item.key)}_${segIndex}`,
-          value: `${dateType}${item.name}: ${segment}`, // 带时段和类型前缀
-          color: getColor(),
+    if (data) {
+      // 解析HTML内容
+      const jsdom = new JSDOM(data);
+      defaultType.forEach((item, index) => {
+        const element = jsdom.window.document.querySelector(`.c_cont p strong.p${index + 1}`)?.nextElementSibling;
+        const content = element?.innerHTML.replace(/<small.*/, '') || DEFAULT_OUTPUT.constellationFortune;
+        
+        // 按20字拆分运势内容
+        const segments = splitTextIntoSegments(content);
+        
+        fortuneData.push({
+          name: toLowerLine(item.key),
+          title: `${finalDateType}${item.name}`,
+          segments,
+          color: getColor()
         });
       });
-    });
+    } else {
+      // 数据获取失败时使用默认内容
+      defaultType.forEach((item) => {
+        fortuneData.push({
+          name: toLowerLine(item.key),
+          title: `${finalDateType}${item.name}`,
+          segments: splitTextIntoSegments(DEFAULT_OUTPUT.constellationFortune),
+          color: getColor()
+        });
+      });
+    }
 
-    // 缓存结构化数据（包含拆分后的多段内容）
-    RUN_TIME_STORAGE[cacheKey] = cloneDeep(res);
-    return res;
+    // 缓存并返回格式化后的数据
+    RUN_TIME_STORAGE[cacheKey] = cloneDeep(fortuneData);
+    return formatFortuneData(fortuneData, finalDateType);
   } catch (e) {
-    console.error('星座运势请求失败', e);
-    // 生成默认的拆分数据
-    defaultType.forEach((item) => {
-      const defaultSegments = splitText(DEFAULT_OUTPUT.constellationFortune, 20);
-      defaultSegments.forEach((seg, segIndex) => {
-        res.push({
-          name: `${toLowerLine(item.key)}_${segIndex}`,
-          value: `${dateType}${item.name}: ${seg}`,
-          color: getColor(),
-        });
-      });
-    });
-    return res;
+    console.error('星座运势请求失败:', e);
+    return {}; // 出错时返回空对象
   }
 };
 
-// 新增：文本拆分函数（可复用）
-const splitText = (text, chunkSize = 20) => {
+// 辅助函数：按20字拆分文本并生成微信模板字段
+const splitTextIntoSegments = (text, maxLength = 20) => {
   const segments = [];
-  for (let i = 0; i < text.length; i += chunkSize) {
-    segments.push(text.slice(i, i + chunkSize));
+  for (let i = 0; i < text.length; i += maxLength) {
+    segments.push({
+      value: text.slice(i, i + maxLength),
+      // 生成如 "wx_horoscope_comprehensive_0" 的字段名
+      fieldName: `wx_horoscope_${segments.length}`
+    });
   }
-  return segments.length === 0 ? [text] : segments; // 处理空文本
+  return segments;
+};
+
+// 格式化返回数据，适配微信模板
+const formatFortuneData = (fortuneData, dateType) => {
+  const result = {
+    wxHoroscopeTitle: `${dateType}星座运势`, // 总标题
+    wxHoroscopeCount: fortuneData.length, // 运势类型数量
+    wxHoroscopes: fortuneData // 所有运势类型数据
+  };
+
+  // 扁平化所有分段，生成直接可用的模板字段
+  fortuneData.forEach((item, typeIndex) => {
+    item.segments.forEach((segment, segIndex) => {
+      // 生成如 "wx_horoscope_comprehensive_0" 的字段名
+      const fieldKey = `wx_horoscope_${item.name}_${segIndex}`;
+      
+      // 只在第一段添加标题前缀，其他段不添加
+      const valueWithPrefix = segIndex === 0 
+        ? `${item.title}: ${segment.value}` 
+        : segment.value;
+      
+      result[fieldKey] = {
+        value: valueWithPrefix,
+        color: item.color
+      };
+    });
+  });
+
+  return result;
 };
 /**
  * 获取课程表
